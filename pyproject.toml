@@ -1,0 +1,19 @@
+[project]
+name = "test-assessment-2"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiohttp>=3.13.5",
+    "alembic>=1.18.4",
+    "fastapi>=0.136.1",
+    "geopy>=2.4.1",
+    "httpx>=0.28.1",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.14.0",
+    "pytest>=9.0.3",
+    "python-dotenv>=1.2.2",
+    "rapidfuzz>=3.14.5",
+    "sqlalchemy>=2.0.49",
+]

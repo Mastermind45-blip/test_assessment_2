@@ -10,10 +10,29 @@ import json
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from xml.dom import minidom
+from xml.etree import ElementTree as ET
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill
 from sqlalchemy.ext.asyncio import AsyncSession
+
+# Try to import PDF library, but don't fail if not installed
+try:
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import (
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
+        Table,
+        TableStyle,
+    )
+
+    REPORTLAB_AVAILABLE = True
+except ImportError:
+    REPORTLAB_AVAILABLE = False
 
 from app.models.weather import WeatherRecord
 from app.repositories.weather_repository import WeatherRepository
@@ -265,6 +284,408 @@ class CSVExporter(WeatherExporter):
             raise
 
 
+class XMLExporter(WeatherExporter):
+    """Export weather data to XML format."""
+
+    async def export(self, record_id: int) -> Optional[str]:
+        """Export weather record to XML string.
+
+        Args:
+            record_id: ID of the weather record
+
+        Returns:
+            XML string, or None if record not found
+        """
+        record = await self.get_record_with_relations(record_id)
+        if not record:
+            logger.warning(f"Record {record_id} not found for XML export")
+            return None
+
+        try:
+            # Create root element
+            root = ET.Element("WeatherRecordExport")
+
+            # Add record info
+            record_elem = ET.SubElement(root, "Record")
+            ET.SubElement(record_elem, "Id").text = str(record.id)
+            ET.SubElement(record_elem, "LocationName").text = record.location_name
+            ET.SubElement(record_elem, "LocationType").text = record.location_type
+            ET.SubElement(record_elem, "Latitude").text = (
+                str(record.latitude) if record.latitude else ""
+            )
+            ET.SubElement(record_elem, "Longitude").text = (
+                str(record.longitude) if record.longitude else ""
+            )
+            ET.SubElement(record_elem, "StartDate").text = (
+                record.start_date.isoformat() if record.start_date else ""
+            )
+            ET.SubElement(record_elem, "EndDate").text = (
+                record.end_date.isoformat() if record.end_date else ""
+            )
+            ET.SubElement(record_elem, "UserNotes").text = record.user_notes or ""
+            ET.SubElement(record_elem, "CreatedAt").text = (
+                record.created_at.isoformat() if record.created_at else ""
+            )
+            ET.SubElement(record_elem, "UpdatedAt").text = (
+                record.updated_at.isoformat() if record.updated_at else ""
+            )
+
+            # Add weather data
+            if record.weather_data:
+                weather_elem = ET.SubElement(root, "WeatherData")
+                for wd in sorted(
+                    record.weather_data, key=lambda x: x.forecast_date or ""
+                ):
+                    day_elem = ET.SubElement(weather_elem, "Day")
+                    ET.SubElement(day_elem, "ForecastDate").text = (
+                        wd.forecast_date.isoformat() if wd.forecast_date else ""
+                    )
+                    ET.SubElement(day_elem, "Temperature").text = (
+                        str(wd.temperature) if wd.temperature else ""
+                    )
+                    ET.SubElement(day_elem, "FeelsLike").text = (
+                        str(wd.feels_like) if wd.feels_like else ""
+                    )
+                    ET.SubElement(day_elem, "TempMin").text = (
+                        str(wd.temp_min) if wd.temp_min else ""
+                    )
+                    ET.SubElement(day_elem, "TempMax").text = (
+                        str(wd.temp_max) if wd.temp_max else ""
+                    )
+                    ET.SubElement(day_elem, "Humidity").text = (
+                        str(wd.humidity) if wd.humidity else ""
+                    )
+                    ET.SubElement(day_elem, "Pressure").text = (
+                        str(wd.pressure) if wd.pressure else ""
+                    )
+                    ET.SubElement(day_elem, "WindSpeed").text = (
+                        str(wd.wind_speed) if wd.wind_speed else ""
+                    )
+                    ET.SubElement(day_elem, "Description").text = (
+                        wd.weather_description or ""
+                    )
+                    ET.SubElement(day_elem, "IconCode").text = wd.icon_code or ""
+
+            # Add YouTube videos
+            if record.youtube_videos:
+                videos_elem = ET.SubElement(root, "YouTubeVideos")
+                for yv in record.youtube_videos:
+                    video_elem = ET.SubElement(videos_elem, "Video")
+                    ET.SubElement(video_elem, "VideoId").text = yv.video_id or ""
+                    ET.SubElement(video_elem, "Title").text = yv.title or ""
+                    ET.SubElement(video_elem, "Description").text = yv.description or ""
+                    ET.SubElement(video_elem, "URL").text = yv.url or ""
+                    ET.SubElement(video_elem, "ThumbnailURL").text = (
+                        yv.thumbnail_url or ""
+                    )
+                    ET.SubElement(video_elem, "ChannelTitle").text = (
+                        yv.channel_title or ""
+                    )
+                    ET.SubElement(video_elem, "PublishedAt").text = (
+                        yv.published_at or ""
+                    )
+
+            # Add map locations
+            if record.map_locations:
+                maps_elem = ET.SubElement(root, "MapLocations")
+                for ml in record.map_locations:
+                    loc_elem = ET.SubElement(maps_elem, "Location")
+                    ET.SubElement(loc_elem, "PlaceId").text = ml.place_id or ""
+                    ET.SubElement(loc_elem, "FormattedAddress").text = (
+                        ml.formatted_address or ""
+                    )
+                    ET.SubElement(loc_elem, "MapURL").text = ml.map_url or ""
+                    ET.SubElement(loc_elem, "StaticMapURL").text = (
+                        ml.static_map_url or ""
+                    )
+                    ET.SubElement(loc_elem, "Latitude").text = (
+                        str(ml.lat) if ml.lat else ""
+                    )
+                    ET.SubElement(loc_elem, "Longitude").text = (
+                        str(ml.lng) if ml.lng else ""
+                    )
+                    ET.SubElement(loc_elem, "PlaceType").text = ml.place_type or ""
+                    ET.SubElement(loc_elem, "PointOfInterest").text = (
+                        ml.point_of_interest or ""
+                    )
+
+            # Add additional API data
+            if record.additional_api_data:
+                api_elem = ET.SubElement(root, "AdditionalAPIData")
+                for ad in record.additional_api_data:
+                    data_elem = ET.SubElement(api_elem, "Data")
+                    ET.SubElement(data_elem, "APIName").text = ad.api_name or ""
+                    ET.SubElement(data_elem, "DataType").text = ad.data_type or ""
+                    ET.SubElement(data_elem, "Payload").text = (
+                        json.dumps(ad.payload) if ad.payload else ""
+                    )
+                    ET.SubElement(data_elem, "FetchedAt").text = (
+                        ad.fetched_at.isoformat() if ad.fetched_at else ""
+                    )
+
+            # Pretty print XML
+            xml_str = ET.tostring(root, encoding="utf-8")
+            dom = minidom.parseString(xml_str)
+            return dom.toprettyxml(indent="  ")
+
+        except Exception as e:
+            logger.error(f"Error exporting record {record_id} to XML: {str(e)}")
+            raise
+
+
+class PDFExporter(WeatherExporter):
+    """Export weather data to PDF format."""
+
+    async def export(self, record_id: int) -> Optional[bytes]:
+        """Export weather record to PDF bytes.
+
+        Args:
+            record_id: ID of the weather record
+
+        Returns:
+            PDF file as bytes, or None if record not found
+        """
+        if not REPORTLAB_AVAILABLE:
+            logger.error("reportlab not installed. Cannot export to PDF.")
+            raise ImportError(
+                "PDF export requires reportlab. Install it with: pip install reportlab"
+            )
+
+        record = await self.get_record_with_relations(record_id)
+        if not record:
+            logger.warning(f"Record {record_id} not found for PDF export")
+            return None
+
+        try:
+            buffer = io.BytesIO()
+            doc = SimpleDocTemplate(buffer, pagesize=letter)
+            styles = getSampleStyleSheet()
+            story = []
+
+            # Title
+            title = Paragraph(
+                f"Weather Record: {record.location_name}", styles["Title"]
+            )
+            story.append(title)
+            story.append(Spacer(1, 12))
+
+            # Record info
+            info_data = [
+                ["Record ID:", str(record.id)],
+                ["Location:", record.location_name],
+                ["Type:", record.location_type],
+                [
+                    "Start Date:",
+                    record.start_date.isoformat() if record.start_date else "N/A",
+                ],
+                [
+                    "End Date:",
+                    record.end_date.isoformat() if record.end_date else "N/A",
+                ],
+                ["Notes:", record.user_notes or "N/A"],
+            ]
+            info_table = Table(info_data, colWidths=[100, 300])
+            info_table.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, -1), colors.lightgrey),
+                        ("TEXTCOLOR", (0, 0), (-1, -1), colors.black),
+                        ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                        ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+                        ("FONTSIZE", (0, 0), (-1, -1), 10),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                    ]
+                )
+            )
+            story.append(info_table)
+            story.append(Spacer(1, 12))
+
+            # Weather data table
+            if record.weather_data:
+                story.append(Paragraph("Weather Forecast Data", styles["Heading2"]))
+                weather_data = [
+                    [
+                        "Date",
+                        "Temp (°C)",
+                        "Feels Like",
+                        "Min",
+                        "Max",
+                        "Humidity",
+                        "Description",
+                    ]
+                ]
+                for wd in sorted(
+                    record.weather_data, key=lambda x: x.forecast_date or ""
+                ):
+                    weather_data.append(
+                        [
+                            wd.forecast_date.isoformat() if wd.forecast_date else "",
+                            str(wd.temperature) if wd.temperature else "",
+                            str(wd.feels_like) if wd.feels_like else "",
+                            str(wd.temp_min) if wd.temp_min else "",
+                            str(wd.temp_max) if wd.temp_max else "",
+                            str(wd.humidity) if wd.humidity else "",
+                            wd.weather_description or "",
+                        ]
+                    )
+                weather_table = Table(weather_data)
+                weather_table.setStyle(
+                    TableStyle(
+                        [
+                            ("BACKGROUND", (0, 0), (-1, 0), colors.grey),
+                            ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+                            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                            ("FONTSIZE", (0, 0), (-1, 0), 10),
+                            ("BOTTOMPADDING", (0, 0), (-1, 0), 12),
+                            ("BACKGROUND", (0, 1), (-1, -1), colors.beige),
+                            ("GRID", (0, 0), (-1, -1), 1, colors.black),
+                        ]
+                    )
+                )
+                story.append(weather_table)
+                story.append(Spacer(1, 12))
+
+            # YouTube videos
+            if record.youtube_videos:
+                story.append(Paragraph("YouTube Videos", styles["Heading2"]))
+                for yv in record.youtube_videos:
+                    video_text = f"<b>{yv.title or 'Untitled'}</b><br/>"
+                    video_text += f"Channel: {yv.channel_title or 'Unknown'}<br/>"
+                    video_text += f"URL: {yv.url or 'N/A'}"
+                    story.append(Paragraph(video_text, styles["Normal"]))
+                    story.append(Spacer(1, 6))
+
+            # Build PDF
+            doc.build(story)
+            buffer.seek(0)
+            return buffer.getvalue()
+
+        except Exception as e:
+            logger.error(f"Error exporting record {record_id} to PDF: {str(e)}")
+            raise
+
+
+class MarkdownExporter(WeatherExporter):
+    """Export weather data to Markdown format."""
+
+    async def export(self, record_id: int) -> Optional[str]:
+        """Export weather record to Markdown string.
+
+        Args:
+            record_id: ID of the weather record
+
+        Returns:
+            Markdown string, or None if record not found
+        """
+        record = await self.get_record_with_relations(record_id)
+        if not record:
+            logger.warning(f"Record {record_id} not found for Markdown export")
+            return None
+
+        try:
+            md_lines = []
+
+            # Title
+            md_lines.append(f"# Weather Record: {record.location_name}")
+            md_lines.append("")
+
+            # Record info
+            md_lines.append("## Record Information")
+            md_lines.append("")
+            md_lines.append(f"- **ID:** {record.id}")
+            md_lines.append(f"- **Location:** {record.location_name}")
+            md_lines.append(f"- **Type:** {record.location_type}")
+            md_lines.append(
+                f"- **Coordinates:** ({record.latitude}, {record.longitude})"
+            )
+            md_lines.append(
+                f"- **Start Date:** {record.start_date.isoformat() if record.start_date else 'N/A'}"
+            )
+            md_lines.append(
+                f"- **End Date:** {record.end_date.isoformat() if record.end_date else 'N/A'}"
+            )
+            md_lines.append(f"- **Notes:** {record.user_notes or 'N/A'}")
+            md_lines.append(
+                f"- **Created:** {record.created_at.isoformat() if record.created_at else 'N/A'}"
+            )
+            md_lines.append(
+                f"- **Updated:** {record.updated_at.isoformat() if record.updated_at else 'N/A'}"
+            )
+            md_lines.append("")
+
+            # Weather data
+            if record.weather_data:
+                md_lines.append("## Weather Forecast Data")
+                md_lines.append("")
+                md_lines.append(
+                    "| Date | Temperature (°C) | Feels Like (°C) | Min (°C) | Max (°C) | Humidity (%) | Description |"
+                )
+                md_lines.append(
+                    "|------|------------------|-----------------|-----------|-----------|---------------|-------------|"
+                )
+                for wd in sorted(
+                    record.weather_data, key=lambda x: x.forecast_date or ""
+                ):
+                    md_lines.append(
+                        f"| {wd.forecast_date.isoformat() if wd.forecast_date else 'N/A'} "
+                        f"| {wd.temperature if wd.temperature else 'N/A'} "
+                        f"| {wd.feels_like if wd.feels_like else 'N/A'} "
+                        f"| {wd.temp_min if wd.temp_min else 'N/A'} "
+                        f"| {wd.temp_max if wd.temp_max else 'N/A'} "
+                        f"| {wd.humidity if wd.humidity else 'N/A'} "
+                        f"| {wd.weather_description or 'N/A'} |"
+                    )
+                md_lines.append("")
+
+            # YouTube videos
+            if record.youtube_videos:
+                md_lines.append("## YouTube Videos")
+                md_lines.append("")
+                for yv in record.youtube_videos:
+                    md_lines.append(f"### {yv.title or 'Untitled'}")
+                    md_lines.append(f"- **Channel:** {yv.channel_title or 'Unknown'}")
+                    md_lines.append(f"- **URL:** {yv.url or 'N/A'}")
+                    md_lines.append(f"- **Published:** {yv.published_at or 'N/A'}")
+                    if yv.description:
+                        md_lines.append(f"- **Description:** {yv.description}")
+                    md_lines.append("")
+
+            # Map locations
+            if record.map_locations:
+                md_lines.append("## Map Locations")
+                md_lines.append("")
+                for ml in record.map_locations:
+                    md_lines.append(f"### {ml.formatted_address or 'Unknown Location'}")
+                    md_lines.append(f"- **Place ID:** {ml.place_id or 'N/A'}")
+                    md_lines.append(f"- **Type:** {ml.place_type or 'N/A'}")
+                    md_lines.append(f"- **Map URL:** {ml.map_url or 'N/A'}")
+                    md_lines.append("")
+
+            # Additional API data
+            if record.additional_api_data:
+                md_lines.append("## Additional API Data")
+                md_lines.append("")
+                for ad in record.additional_api_data:
+                    md_lines.append(f"### {ad.api_name or 'Unknown API'}")
+                    md_lines.append(f"- **Data Type:** {ad.data_type or 'N/A'}")
+                    md_lines.append(
+                        f"- **Fetched At:** {ad.fetched_at.isoformat() if ad.fetched_at else 'N/A'}"
+                    )
+                    if ad.payload:
+                        md_lines.append("**Payload:**")
+                        md_lines.append("```json")
+                        md_lines.append(json.dumps(ad.payload, indent=2))
+                        md_lines.append("```")
+                    md_lines.append("")
+
+            return "\n".join(md_lines)
+
+        except Exception as e:
+            logger.error(f"Error exporting record {record_id} to Markdown: {str(e)}")
+            raise
+
+
 class ExcelExporter(WeatherExporter):
     """Export weather data to Excel format."""
 
@@ -468,8 +889,12 @@ class ExportManager:
         Returns:
             JSON-serializable dictionary
         """
-        exporter = JSONExporter(self.db)
-        return await exporter.export(record_id)
+        try:
+            exporter = JSONExporter(self.db)
+            return await exporter.export(record_id)
+        except Exception as e:
+            logger.error(f"Error in ExportManager.export_to_json: {str(e)}")
+            raise
 
     async def export_to_csv(self, record_id: int) -> Optional[str]:
         """Export record to CSV format.
@@ -480,8 +905,60 @@ class ExportManager:
         Returns:
             CSV string
         """
-        exporter = CSVExporter(self.db)
-        return await exporter.export(record_id)
+        try:
+            exporter = CSVExporter(self.db)
+            return await exporter.export(record_id)
+        except Exception as e:
+            logger.error(f"Error in ExportManager.export_to_csv: {str(e)}")
+            raise
+
+    async def export_to_xml(self, record_id: int) -> Optional[str]:
+        """Export record to XML format.
+
+        Args:
+            record_id: ID of the weather record
+
+        Returns:
+            XML string
+        """
+        try:
+            exporter = XMLExporter(self.db)
+            return await exporter.export(record_id)
+        except Exception as e:
+            logger.error(f"Error in ExportManager.export_to_xml: {str(e)}")
+            raise
+
+    async def export_to_pdf(self, record_id: int) -> Optional[bytes]:
+        """Export record to PDF format.
+
+        Args:
+            record_id: ID of the weather record
+
+        Returns:
+            PDF file as bytes
+        """
+        try:
+            exporter = PDFExporter(self.db)
+            return await exporter.export(record_id)
+        except Exception as e:
+            logger.error(f"Error in ExportManager.export_to_pdf: {str(e)}")
+            raise
+
+    async def export_to_markdown(self, record_id: int) -> Optional[str]:
+        """Export record to Markdown format.
+
+        Args:
+            record_id: ID of the weather record
+
+        Returns:
+            Markdown string
+        """
+        try:
+            exporter = MarkdownExporter(self.db)
+            return await exporter.export(record_id)
+        except Exception as e:
+            logger.error(f"Error in ExportManager.export_to_markdown: {str(e)}")
+            raise
 
     async def export_to_excel(self, record_id: int) -> Optional[bytes]:
         """Export record to Excel format.
@@ -492,15 +969,19 @@ class ExportManager:
         Returns:
             Excel file as bytes
         """
-        exporter = ExcelExporter(self.db)
-        return await exporter.export(record_id)
+        try:
+            exporter = ExcelExporter(self.db)
+            return await exporter.export(record_id)
+        except Exception as e:
+            logger.error(f"Error in ExportManager.export_to_excel: {str(e)}")
+            raise
 
     async def get_export_filename(self, record_id: int, format: str) -> Optional[str]:
         """Generate export filename for a record.
 
         Args:
             record_id: ID of the weather record
-            format: Export format (json, csv, xlsx)
+            format: Export format (json, csv, xml, pdf, md, xlsx)
 
         Returns:
             Filename string, or None if record not found
@@ -520,8 +1001,38 @@ class ExportManager:
         extension_map = {
             "json": "json",
             "csv": "csv",
+            "xml": "xml",
+            "pdf": "pdf",
+            "md": "md",
             "xlsx": "xlsx",
         }
 
         extension = extension_map.get(format.lower(), "txt")
         return f"weather_{safe_location}_{record_id}_{timestamp}.{extension}"
+
+    async def export(self, record_id: int, format: str) -> Optional[Any]:
+        """Unified export method that routes to appropriate exporter.
+
+        Args:
+            record_id: ID of the weather record
+            format: Export format (json, csv, xml, pdf, md, xlsx)
+
+        Returns:
+            Exported data in the appropriate format
+        """
+        format_lower = format.lower()
+
+        if format_lower == "json":
+            return await self.export_to_json(record_id)
+        elif format_lower == "csv":
+            return await self.export_to_csv(record_id)
+        elif format_lower == "xml":
+            return await self.export_to_xml(record_id)
+        elif format_lower == "pdf":
+            return await self.export_to_pdf(record_id)
+        elif format_lower == "md" or format_lower == "markdown":
+            return await self.export_to_markdown(record_id)
+        elif format_lower == "xlsx" or format_lower == "excel":
+            return await self.export_to_excel(record_id)
+        else:
+            raise ValueError(f"Unsupported export format: {format}")

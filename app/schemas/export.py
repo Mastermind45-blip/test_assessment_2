@@ -7,14 +7,14 @@ from pydantic import BaseModel, ConfigDict, field_validator
 class ExportBase(BaseModel):
     """Base schema for export operations."""
 
-    format: str  # 'csv', 'json', 'xlsx'
+    format: str  # 'csv', 'json', 'xlsx', 'xml', 'pdf', 'md'
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     location_id: Optional[int] = None
 
     @field_validator("format")
     def validate_format(cls, v: str) -> str:
-        allowed = ("csv", "json", "xlsx")
+        allowed = ("csv", "json", "xlsx", "xml", "pdf", "md")
         if v not in allowed:
             raise ValueError(f"Format must be one of: {', '.join(allowed)}")
         return v

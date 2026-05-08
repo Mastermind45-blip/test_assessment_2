@@ -2,22 +2,22 @@
 
 from app.schemas.export import ExportRequest, ExportResponse
 from app.schemas.weather import (
-    Coordinate,
-    LocationNested,
-    WeatherBase,
-    WeatherCreate,
-    WeatherResponse,
-    WeatherUpdate,
+    MapLocationData,
+    WeatherForecastData,
+    WeatherRecordCreate,
+    WeatherRecordResponse,
+    WeatherRecordUpdate,
+    YouTubeVideoData,
 )
 
 __all__ = [
-    # Weather schemas
-    "Coordinate",
-    "LocationNested",
-    "WeatherBase",
-    "WeatherCreate",
-    "WeatherUpdate",
-    "WeatherResponse",
+    # Weather Record schemas (main use case)
+    "WeatherRecordCreate",
+    "WeatherRecordResponse",
+    "WeatherRecordUpdate",
+    "WeatherForecastData",
+    "YouTubeVideoData",
+    "MapLocationData",
     # Export schemas
     "ExportRequest",
     "ExportResponse",
